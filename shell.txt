@@ -1,0 +1,410 @@
+sudo apt update
+sudo apt install openssh-server
+
+ssh-keygen -t ed25519 -C "alen default"
+ssh-keygen -t ed25519 -C "ansible"
+     nano copyid.sh   
+                   for i in {201..236}
+			do
+			  ssh-copy-id -i ~/.ssh/id_ed25519.pub admin1@192.168.10.$i
+			done
+
+#to diable other users ssh do this 
+					for i in {201..236}
+					do
+					  ssh admin1@192.168.10.$i "sudo sed -i '/^AllowUsers/d' /etc/ssh/sshd_config && echo 'AllowUsers admin1' | sudo tee -a /etc/ssh/sshd_config && sudo systemctl restart ssh"
+					done
+
+
+#to enable other users do this
+
+							    for i in {201..236}
+				do
+				  ssh admin1@192.168.10.$i "
+				    sudo sed -i '/^AllowUsers/d;/^DenyUsers/d' /etc/ssh/sshd_config &&
+				    sudo sed -i 's/^PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config &&
+				    sudo systemctl restart ssh
+				  "
+				done
+     
+     
+     
+     a script that   delete all files in s1a1 to s7b2 and recreate it and add a cron job for exam to delete all files after one day 
+     
+     
+     
+     #!/bin/bash
+# =====================================================
+# LAB MASTER SCRIPT – USERS + EXAM CLEANUP (ALL PCS)
+# =====================================================
+
+ADMIN=""
+PASS=""
+NET="192.168.10"
+START=201
+END=236
+
+# Logs in same folder as script
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MASTER_LOG="$SCRIPT_DIR/master.log"
+ERROR_LOG="$SCRIPT_DIR/master_errors.log"
+
+echo "===== LAB MASTER START $(date) =====" >> "$MASTER_LOG"
+
+for ip in $(seq $START $END); do
+  HOST="$NET.$ip"
+  echo "---- $HOST ----" | tee -a "$MASTER_LOG"
+
+  if ! ping -c1 -W1 "$HOST" &>/dev/null; then
+    echo "[SKIP] $HOST unreachable" | tee -a "$MASTER_LOG"
+    continue
+  fi
+
+  sshpass -p "$PASS" ssh \
+    -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 \
+    "$ADMIN@$HOST" "sudo -S bash -s" >>"$MASTER_LOG" 2>>"$ERROR_LOG" << 'EOF'
+#!/bin/bash
+set -e
+
+############################
+# 1️⃣ TERMINAL PATH FIX
+############################
+cat > /etc/skel/.bashrc << 'BASHRC'
+PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+alias ls='ls --color=auto'
+HISTSIZE=1000
+HISTFILESIZE=2000
+shopt -s histappend
+BASHRC
+
+chmod 644 /etc/skel/.bashrc
+
+for d in /home/*; do
+  [ -d "$d" ] || continue
+  u=$(basename "$d")
+  cp /etc/skel/.bashrc "$d/.bashrc" 2>/dev/null || true
+  chown "$u:$u" "$d/.bashrc" 2>/dev/null || true
+done
+
+chmod 755 /home
+
+############################
+# 2️⃣ ENSURE LAB USERS
+############################
+getent group users >/dev/null || groupadd users
+
+for s in {1..8}; do
+  for sec in a b; do
+    for n in 1 2; do
+      u="s${s}${sec}${n}"
+      if ! id "$u" &>/dev/null; then
+        useradd -m -s /bin/bash -G users "$u"
+        echo "$u:$u" | chpasswd 2>/dev/null
+        cp /etc/skel/.bashrc "/home/$u/.bashrc"
+        chown "$u:users" "/home/$u/.bashrc"
+      fi
+    done
+  done
+done
+
+############################
+# 3️⃣ EXAM USER AUTO-DELETE
+############################
+
+# Cleanup script
+cat > /usr/local/bin/clean_exam << 'CLEAN'
+#!/bin/bash
+for u in $(getent passwd | awk -F: '/^exam/{print $1}'); do
+  loginctl terminate-user "$u" &>/dev/null || true
+  userdel -r "$u" &>/dev/null || true
+done
+CLEAN
+
+chmod +x /usr/local/bin/clean_exam
+
+# Every 2 days at 2 AM
+cat > /etc/cron.d/examclean << 'CRON'
+0 2 */2 * * root /usr/local/bin/clean_exam
+CRON
+
+chmod 644 /etc/cron.d/examclean
+
+EOF
+
+  if [ $? -eq 0 ]; then
+    echo "[OK] $HOST completed" | tee -a "$MASTER_LOG"
+  else
+    echo "[FAIL] $HOST error" | tee -a "$MASTER_LOG"
+  fi
+done
+
+echo "===== LAB MASTER END $(date) =====" >> "$MASTER_LOG"
+echo "📄 Logs saved in: $SCRIPT_DIR"
+
+
+
+
+
+
+alternate code  if above one not working try this  ###############################################################################################
+
+
+
+
+
+
+#!/bin/bash
+# =====================================================
+# LAB MASTER SCRIPT – PASSWORD BASED (sshpass)
+# =====================================================
+
+ADMIN=""
+PASS=""
+NET="192.168.10"
+START=201
+END=236
+
+# 📍 Logs in script folder
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MASTER_LOG="$SCRIPT_DIR/master.log"
+ERROR_LOG="$SCRIPT_DIR/master_errors.log"
+
+echo "===== LAB MASTER START $(date) =====" >> "$MASTER_LOG"
+
+for ip in $(seq $START $END); do
+  HOST="$NET.$ip"
+  echo "---- $HOST ----" | tee -a "$MASTER_LOG"
+
+  # Check reachability
+  if ! ping -c1 -W1 "$HOST" &>/dev/null; then
+    echo "[SKIP] $HOST unreachable" | tee -a "$MASTER_LOG"
+    continue
+  fi
+
+  sshpass -p "$PASS" ssh \
+    -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 \
+    "$ADMIN@$HOST" "sudo -S bash -s" >>"$MASTER_LOG" 2>>"$ERROR_LOG" << 'EOF'
+#!/bin/bash
+set -e
+
+# ---------- FIX TERMINAL PROMPT ----------
+cat > /etc/skel/.bashrc << 'BASHRC'
+PS1='${debian_chroot:+($debian_chroot)}\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
+alias ls='ls --color=auto'
+HISTSIZE=1000
+HISTFILESIZE=2000
+shopt -s histappend
+BASHRC
+
+chmod 644 /etc/skel/.bashrc
+
+for d in /home/*; do
+  [ -d "$d" ] || continue
+  u=$(basename "$d")
+  cp /etc/skel/.bashrc "$d/.bashrc" 2>/dev/null || true
+  chown "$u:$u" "$d/.bashrc" 2>/dev/null || true
+done
+
+chmod 755 /home
+
+# ---------- ENSURE LAB USERS ----------
+getent group users >/dev/null || groupadd users
+
+for s in {1..8}; do
+  for sec in a b; do
+    for n in 1 2; do
+      u="s${s}${sec}${n}"
+      if ! id "$u" &>/dev/null; then
+        useradd -m -s /bin/bash -G users "$u"
+        echo "$u:$u" | chpasswd 2>/dev/null
+        cp /etc/skel/.bashrc "/home/$u/.bashrc"
+        chown "$u:users" "/home/$u/.bashrc"
+      fi
+    done
+  done
+done
+EOF
+
+  if [ $? -eq 0 ]; then
+    echo "[OK] $HOST fixed" | tee -a "$MASTER_LOG"
+  else
+    echo "[FAIL] $HOST error" | tee -a "$MASTER_LOG"
+  fi
+done
+
+echo "===== LAB MASTER END $(date) =====" >> "$MASTER_LOG"
+echo "📄 Logs saved in: $SCRIPT_DIR"
+
+
+
+
+
+to fix sshpass in nos lab i try this i work except 101 and some pc's##################################################################
+
+
+
+
+
+#!/bin/bash
+# =====================================================
+# ALL-IN-ONE SSH LAB FIX + KEY SETUP
+# USER     : 
+# PASSWORD : 
+# RANGE    : 192.168.10.101 - 135
+# =====================================================
+
+USER=""
+PASS=""
+BASE_IP="192.168.10"
+START=101
+END=135
+
+SSH_DIR="$HOME/.ssh"
+KNOWN_HOSTS="$SSH_DIR/known_hosts"
+KEY="$SSH_DIR/id_ed25519"
+
+echo "===== SSH LAB ALL-IN-ONE STARTED ====="
+
+# -----------------------------------------------------
+# 0. Check sshpass
+# -----------------------------------------------------
+if ! command -v sshpass &>/dev/null; then
+  echo "[+] Installing sshpass..."
+  sudo apt update && sudo apt install sshpass -y
+fi
+
+# -----------------------------------------------------
+# 1. Prepare local SSH
+# -----------------------------------------------------
+mkdir -p "$SSH_DIR"
+chmod 700 "$SSH_DIR"
+
+if [ -f "$KNOWN_HOSTS" ]; then
+  mv "$KNOWN_HOSTS" "$KNOWN_HOSTS.bak.$(date +%F-%H%M%S)"
+fi
+touch "$KNOWN_HOSTS"
+chmod 600 "$KNOWN_HOSTS"
+
+if [ ! -f "$KEY" ]; then
+  echo "[+] Generating SSH key..."
+  ssh-keygen -t ed25519 -f "$KEY" -N ""
+fi
+
+# -----------------------------------------------------
+# 2. LOOP THROUGH ALL PCS
+# -----------------------------------------------------
+for i in $(seq $START $END); do
+  IP="$BASE_IP.$i"
+  echo "-------------------------------------"
+  echo "[*] Processing $IP"
+
+  # Remove old host key
+  ssh-keygen -R "$IP" &>/dev/null
+
+  # -------------------------------------------------
+  # 2A. FORCE ENABLE SSH ON REMOTE PC
+  # -------------------------------------------------
+  sshpass -p "$PASS" ssh \
+    -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 \
+    "$USER@$IP" "echo $PASS | sudo -S bash -c '
+      systemctl enable ssh || systemctl enable sshd
+      systemctl restart ssh || systemctl restart sshd
+
+      echo \"sshd: ALL\" > /etc/hosts.allow
+      echo \"\" > /etc/hosts.deny
+
+      sed -i \"/Banner/d\" /etc/ssh/sshd_config
+      sed -i \"s/^PasswordAuthentication.*/PasswordAuthentication yes/\" /etc/ssh/sshd_config
+      sed -i \"s/^#PasswordAuthentication.*/PasswordAuthentication yes/\" /etc/ssh/sshd_config
+
+      passwd -u $USER || true
+      systemctl restart ssh || systemctl restart sshd
+    '" &>/dev/null \
+    || echo "[!] SSH enable failed on $IP (may be offline)"
+
+  # -------------------------------------------------
+  # 2B. ADD HOST KEY
+  # -------------------------------------------------
+  ssh-keyscan -H "$IP" >> "$KNOWN_HOSTS" 2>/dev/null
+
+  # -------------------------------------------------
+  # 2C. COPY SSH KEY
+  # -------------------------------------------------
+  sshpass -p "$PASS" ssh-copy-id \
+    -o StrictHostKeyChecking=no \
+    "$USER@$IP" \
+    && echo "[✔] SSH key installed on $IP" \
+    || echo "[❌] SSH key FAILED on $IP"
+
+done
+
+echo "===== SSH LAB ALL-IN-ONE COMPLETED ====="
+
+
+
+to drop all databases except some in dbms lab i try thi script######################################################################
+
+
+#!/bin/bash
+# =========================================================
+# MYSQL DATABASE CLEANUP (SAFE – DATA ONLY)
+# RANGE    : 192.168.10.101 - 135
+# SSH USER : 
+# SSH PASS : 
+# MYSQL USER: 
+# MYSQL PASS: 
+# =========================================================
+
+SSH_USER=""
+SSH_PASS=""
+
+MYSQL_USER=""
+MYSQL_PASS=""
+
+BASE_IP="192.168.10"
+START=101
+END=135
+
+# System databases (DO NOT DELETE)
+SYSTEM_DBS="'mysql','information_schema','performance_schema','sys','S4B'"
+
+echo "===== MYSQL DATABASE CLEANUP STARTED ====="
+
+# Ensure sshpass exists
+if ! command -v sshpass &>/dev/null; then
+  echo "[+] Installing sshpass..."
+  sudo apt update && sudo apt install sshpass -y
+fi
+
+for i in $(seq $START $END); do
+  IP="$BASE_IP.$i"
+  echo "------------------------------------------"
+  echo "[*] Processing $IP"
+
+  sshpass -p "$SSH_PASS" ssh \
+    -o StrictHostKeyChecking=no \
+    -o ConnectTimeout=5 \
+    "$SSH_USER@$IP" "
+      mysql -u$MYSQL_USER -p$MYSQL_PASS -N -e \"
+        SELECT CONCAT('DROP DATABASE \\\`', schema_name, '\\\`;')
+        FROM information_schema.schemata
+        WHERE schema_name NOT IN ($SYSTEM_DBS);
+      \" 2>/dev/null | mysql -u$MYSQL_USER -p$MYSQL_PASS
+    " \
+    && echo "[✔] All non-system databases DELETED on $IP" \
+    || echo "[❌] FAILED on $IP (mysql/ssh issue)"
+
+done
+
+echo "===== MYSQL DATABASE CLEANUP COMPLETED ====="
+
+
+
+
+
+
+
+
