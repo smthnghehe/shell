@@ -402,7 +402,13 @@ done
 echo "===== MYSQL DATABASE CLEANUP COMPLETED ====="
 
 
+#..........................................to copy id  means  copy ssh id to all other systems ssh-copy-id -i ~/.ssh/id_ed25519.pub admin1@192.168.10.$i
+ 
 
+for i in {201..236}
+do
+  ssh-copy-id -i ~/.ssh/id_ed25519.pub 
+done
 
 
 
